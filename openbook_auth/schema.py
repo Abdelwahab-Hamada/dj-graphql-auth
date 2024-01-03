@@ -5,6 +5,7 @@ from allauth.socialaccount.adapter import get_adapter
 from allauth.socialaccount.models import SocialToken, SocialLogin, SocialAccount
 from allauth.socialaccount.helpers import (
     complete_social_login,
+    complete_social_signup,
 )
 
 from graphene_django import DjangoObjectType
@@ -15,6 +16,33 @@ from django.contrib.auth.models import User
 from graphql_relay import from_global_id
 
 from allauth.socialaccount import signals
+
+
+class FacebookSignupMutation(relay.ClientIDMutation):
+    signup = graphene.String()
+
+    class Input:
+        access_token = graphene.String(required=True)
+
+    @classmethod
+    def mutate_and_get_payload(cls, root, info, **input):
+        adapter = get_adapter()
+        provider = adapter.get_provider(info.context, 'facebook')
+        app = provider.app
+        expires_at = None
+        token = SocialToken(app=app, token=input.get(
+            'access_token'), expires_at=expires_at)
+
+        adapter_class = FacebookOAuth2Adapter(info.context)
+        login = adapter_class.complete_login(
+            info.context, app, access_token=token)
+        login.token = token
+        login.state = SocialLogin.state_from_request(info.context)
+        sociallogin = complete_social_login(info.context, login)
+
+        resp = complete_social_signup(info.context, sociallogin)
+
+        return cls(signup=resp)
 
 
 class FacebookLoginMutation(relay.ClientIDMutation):
@@ -41,6 +69,7 @@ class FacebookLoginMutation(relay.ClientIDMutation):
 
         return cls(login=ret)
 
+
 class SocialAccountDisconnetMutation(relay.ClientIDMutation):
     success = graphene.String()
 
@@ -50,7 +79,8 @@ class SocialAccountDisconnetMutation(relay.ClientIDMutation):
 
     @classmethod
     def mutate_and_get_payload(cls, root, info, **input):
-        social_account = SocialAccount.objects.get(pk=from_global_id(input.get('social_account_id'))[1])
+        social_account = SocialAccount.objects.get(
+            pk=from_global_id(input.get('social_account_id'))[1])
         user = User.objects.get(pk=from_global_id(input.get('user_id'))[1])
         accounts = SocialAccount.objects.filter(user=user)
 
@@ -63,14 +93,18 @@ class SocialAccountDisconnetMutation(relay.ClientIDMutation):
         )
 
         return cls(success=True)
-    
+
+
 class Mutation(ObjectType):
+    facebook_signup = FacebookSignupMutation.Field()
     facebook_login = FacebookLoginMutation.Field()
     social_account_disconnect = SocialAccountDisconnetMutation.Field()
+
 
 class UserNode(DjangoObjectType):
     class Meta:
         model = User
+
 
 class SocialAccountNode(DjangoObjectType):
     class Meta:
